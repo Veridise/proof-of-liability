@@ -123,6 +123,7 @@ export class Escrow extends SmartContract {
         let oldBal = this.curBal.get();
         this.curBal.assertEquals(oldBal);
 
+        this.account.balance.get();
         let curBal = Mina.getBalance(this.address, tid);
         curBal.assertGreaterThanOrEqual(oldBal);
 

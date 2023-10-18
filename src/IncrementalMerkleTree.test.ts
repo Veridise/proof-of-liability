@@ -7,10 +7,16 @@ import {
   MerkleWitness,
   PrivateKey,
   Mina,
-  AccountUpdate
+  AccountUpdate,
+  Provable
 } from 'o1js';
 
 import { IncrementalMerkleTree, IncrementalWitness, RollupProver } from './IncrementalMerkleTree';
+
+/*
+ * To get constraints:
+ * IncrementalMerkleTree.analyzeMethods();
+ */
 
 describe('IncrementalMerkleTree.js', () => {
   let treePrivateKey : PrivateKey,

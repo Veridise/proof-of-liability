@@ -73,6 +73,7 @@ export class AppendOnlyLiabilityTree extends SmartContract {
     @state(Field) ind = State<Field>();
     @state(Field) actionState = State<Field>();
     @state(PublicKey) exchange = State<PublicKey>();
+    @state(Field) totalLiability = State<Field>();
 
     reducer = Reducer({actionType: Field});
 
