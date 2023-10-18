@@ -5,7 +5,6 @@ export const users = {
     exchange: PrivateKey.random()
   };
 
-const BATCH_SIZE = 32;
 const height = 32;
 export class LiabilityWitness extends MerkleWitness(height) {}
 
@@ -88,10 +87,11 @@ const zeros = [
     Field(19057105225525447794058879360670244229202611178388892366137113354909512903676n)
     ];
 
-function processDeposit(root: Field, req: Deposit, sig: Signature, proof: LiabilityProof): Field {
+export class TreeState extends Struct({root: Field, totalLiability: Field}) {}
+function processDeposit(state: TreeState, req: Deposit, sig: Signature, proof: LiabilityProof): TreeState {
     req.prev.equals(0).or(req.prev.equals(proof.leaf.hash())).assertTrue();
     req.prev.equals(0).or(req.account.equals(proof.leaf.account)).assertTrue();
-    proof.witness.calculateRoot(req.prev).assertEquals(root);
+    proof.witness.calculateRoot(req.prev).assertEquals(state.root);
     req.tid.assertEquals(tid);
 
     let oldBal = Provable.if(req.prev.equals(0), Field, Field(0), proof.leaf.balance);
@@ -101,14 +101,15 @@ function processDeposit(root: Field, req: Deposit, sig: Signature, proof: Liabil
     newBal.assertGreaterThanOrEqual(req.amount);
     let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, prev: req.prev});
     let newRoot = proof.witness.calculateRoot(newLeaf.hash());
-    return newRoot;
+    let newTotal = state.totalLiability.add(req.amount);
+    return new TreeState({root: newRoot, totalLiability: newTotal})
 }
 
-function processWithdraw(root: Field, req: Withdraw, sig: Signature, proof: LiabilityProof): Field {
+function processWithdraw(state: TreeState, req: Withdraw, sig: Signature, proof: LiabilityProof): TreeState {
     req.prev.assertNotEquals(0);
     req.prev.assertEquals(proof.leaf.hash());
     req.account.assertEquals(proof.leaf.account);
-    proof.witness.calculateRoot(req.prev).assertEquals(root);
+    proof.witness.calculateRoot(req.prev).assertEquals(state.root);
     req.tid.assertEquals(tid);
 
     proof.leaf.balance.assertGreaterThanOrEqual(req.amount);
@@ -116,12 +117,11 @@ function processWithdraw(root: Field, req: Withdraw, sig: Signature, proof: Liab
     let newBal = proof.leaf.balance.sub(req.amount);
     let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, prev: req.prev});
     let newRoot = proof.witness.calculateRoot(newLeaf.hash());
-    return newRoot;
+    let newTotal = state.totalLiability.sub(req.amount);
+    return new TreeState({root: newRoot, totalLiability: newTotal});
 }
 
-// Currently only has a field. Keeping this is another struct so it can more easily be customized as we need in future.
-export class TreeState extends Struct({root: Field}) {}
-const RollupProver = Experimental.ZkProgram({
+export const RollupProver = Experimental.ZkProgram({
     publicInput: TreeState,
     publicOutput: TreeState,
     methods: {
@@ -129,16 +129,16 @@ const RollupProver = Experimental.ZkProgram({
             privateInputs: [Deposit, Signature, LiabilityProof],
             method(start: TreeState, req: Deposit, sig: Signature, proof: LiabilityProof): TreeState {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-                let newRoot = processDeposit(start.root, req, sig, proof);
-                return new TreeState({root: newRoot});
+                let newState = processDeposit(start, req, sig, proof);
+                return newState;
             }
         },
         withdraw: {
             privateInputs: [Withdraw, Signature, LiabilityProof],
             method(start: TreeState, req: Withdraw, sig: Signature, proof: LiabilityProof): TreeState {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-                let newRoot = processWithdraw(start.root, req, sig, proof);
-                return new TreeState({root: newRoot});
+                let newState = processWithdraw(start, req, sig, proof);
+                return newState
             }
         },
         swapFrom: {
@@ -146,8 +146,8 @@ const RollupProver = Experimental.ZkProgram({
             method(start: TreeState, req: Swap, sig: Signature, proof: LiabilityProof): TreeState {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true))
                 let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, tid: req.fromId, prev: req.prevFrom})
-                let newRoot = processWithdraw(start.root, withdrawReq, sig, proof);
-                return new TreeState({root: newRoot})
+                let newState = processWithdraw(start, withdrawReq, sig, proof);
+                return newState
             }
         },
         swapTo: {
@@ -155,11 +155,11 @@ const RollupProver = Experimental.ZkProgram({
             method(start: TreeState, req: Swap, sig: Signature, proof: LiabilityProof): TreeState {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
                 let depositReq = new Deposit({account: req.account, amount: req.toAmount, tid: req.toId, prev: req.prevTo});
-                let newRoot = processDeposit(start.root, depositReq, sig, proof);
-                return new TreeState({root: newRoot})
+                let newState = processDeposit(start, depositReq, sig, proof);
+                return newState
             }
         },
-        batch8: {
+        /*batch8: {
             privateInputs: [SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof],
             method(startState: TreeState, l1: SelfProof<TreeState, TreeState>, l2: SelfProof<TreeState, TreeState>, l3: SelfProof<TreeState, TreeState>, l4: SelfProof<TreeState, TreeState>, l5: SelfProof<TreeState, TreeState>, l6: SelfProof<TreeState, TreeState>, l7: SelfProof<TreeState, TreeState>, l8: SelfProof<TreeState, TreeState>): TreeState {
                 l1.verify();
@@ -194,7 +194,7 @@ const RollupProver = Experimental.ZkProgram({
                 l3.publicOutput.root.assertEquals(l4.publicInput.root);
                 return l4.publicOutput;
             }
-        },
+        },*/
         merge: {
             privateInputs: [SelfProof, SelfProof],
             method(startState: TreeState, left: SelfProof<TreeState, TreeState>, right: SelfProof<TreeState, TreeState>): TreeState {
@@ -216,6 +216,7 @@ export class LiabilityTree extends SmartContract {
     @state(Field) root = State<Field>();
     @state(Field) actionState = State<Field>();
     @state(PublicKey) exchange = State<PublicKey>();
+    @state(Field) totalLiability = State<Field>();
 
     reducer = Reducer({actionType: Field});
 
@@ -236,46 +237,66 @@ export class LiabilityTree extends SmartContract {
         let root = this.root.get();
         this.root.assertEquals(root);
 
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-        let newRoot = processDeposit(root, req, sig, proof);
-        this.root.set(newRoot);
+        let state = new TreeState({root, totalLiability});
+        let newState = processDeposit(state, req, sig, proof);
+        
+        this.root.set(newState.root);
+        this.totalLiability.set(newState.totalLiability)
     }
 
     @method withdraw(key: PrivateKey, req: Withdraw, sig: Signature, proof: LiabilityProof) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-        let newRoot = processWithdraw(root, req, sig, proof);
-        this.root.set(newRoot);
+        let state = new TreeState({root, totalLiability});
+        let newState = processWithdraw(state, req, sig, proof);
+        
+        this.root.set(newState.root);
+        this.totalLiability.set(newState.totalLiability)
     }
 
     @method swapFrom(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true))
-        let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, tid: req.fromId, prev: req.prevFrom})
-        let newRoot = processWithdraw(root, withdrawReq, sig, proof);
+        let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, tid: req.fromId, prev: req.prevFrom});
+        let state = new TreeState({root, totalLiability});
+        let newState = processWithdraw(state, withdrawReq, sig, proof);
 
-        this.root.set(newRoot);
+        this.root.set(newState.root);
+        this.totalLiability.set(newState.totalLiability)
     }
 
     @method swapTo(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof) {
         let root = this.root.get();
         this.root.assertEquals(root);
+
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
 
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
@@ -283,9 +304,11 @@ export class LiabilityTree extends SmartContract {
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
         let depositReq = new Deposit({account: req.account, amount: req.toAmount, tid: req.toId, prev: req.prevTo});
-        let newRoot = processDeposit(root, depositReq, sig, proof);
+        let state = new TreeState({root, totalLiability});
+        let newState = processDeposit(state, depositReq, sig, proof);
 
-        this.root.set(newRoot);
+        this.root.set(newState.root);
+        this.totalLiability.set(newState.totalLiability)
     }
 
     @method changeExchange(oldKey: PrivateKey, newKey: PrivateKey) {

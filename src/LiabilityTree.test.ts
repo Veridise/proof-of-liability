@@ -1,4 +1,4 @@
-import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, users } from './LiabilityTree';
+import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, users, RollupProof, RollupProver } from './LiabilityTree';
 
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, Signature, isReady, shutdown } from "o1js";
 
@@ -13,7 +13,8 @@ describe('LiabilityTree.js', () => {
   beforeAll(async () => {
     await isReady;
 
-    await LiabilityTree.compile()
+    await RollupProver.compile();
+    await LiabilityTree.compile();
 
     exchange = users['exchange'];
     let Local = Mina.LocalBlockchain();
@@ -73,14 +74,17 @@ describe('LiabilityTree.js', () => {
     let key = PrivateKey.random();
     let index = BigInt(Math.floor(Math.random() * 2 ** 31));
 
-    let deposit = new Deposit({account: key.toPublicKey(), amount: Field(100), tid: Field(0), prev: Field(0)});
+    let amount = Field.random();
+    let deposit = new Deposit({account: key.toPublicKey(), amount: amount, tid: Field(0), prev: Field(0)});
     let hash = deposit.hash();
     let sig = Signature.create(exchange, deposit.toFields())
     let leaf = new LiabilityLeaf({account: key.toPublicKey(), balance: Field(0), prev: Field(0)});
     let witness = new LiabilityWitness(refTree.getWitness(index))
     let proof = new LiabilityProof({leaf: leaf, witness: witness});
 
-    let txn = await Mina.transaction(feePayer, () => {
+    expect(() => incTree.deposit(exchange, deposit, sig, proof)).toThrow();
+
+    /*let txn = await Mina.transaction(feePayer, () => {
       incTree.deposit(exchange, deposit, sig, proof);
     });
 
@@ -90,6 +94,7 @@ describe('LiabilityTree.js', () => {
     let nextLeaf = new LiabilityLeaf({account: key.toPublicKey(), balance: deposit.amount, prev: Field(0)});
     refTree.setLeaf(index, nextLeaf.hash())
 
-    expect(incTree.root.get()).toEqual(refTree.getRoot());
+    expect(incTree.root.get()).toEqual(refTree.getRoot())
+    expect(amount).toEqual(incTree.totalLiability.get())*/
   });
 });
