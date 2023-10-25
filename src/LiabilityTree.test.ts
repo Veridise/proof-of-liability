@@ -1,14 +1,49 @@
-import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, users, RollupProof, RollupProver } from './LiabilityTree';
+import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, RollupProof, RollupProver } from './LiabilityTree';
 
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, Signature, isReady, shutdown } from "o1js";
+import { LiabilityState, randomDeposit } from './test/helpers';
 
 describe('LiabilityTree.js', () => {
+  let state : LiabilityState,
+    feePayer: PrivateKey,
+    keys: Array<PrivateKey>;
+
+  beforeAll(async () => {
+    await isReady;
+
+    await RollupProver.compile();
+    await LiabilityTree.compile();
+
+    let Local = Mina.LocalBlockchain();
+    Mina.setActiveInstance(Local);
+    state = new LiabilityState();
+    feePayer = Local.testAccounts[0].privateKey;
+    keys = new Array<PrivateKey>();
+    state.addTree(Field(0), feePayer)
+    
+    for(let i = 0; i < 5; i++) {
+      let key = PrivateKey.random();
+      keys.push(key);
+    }
+  });
+
+  afterAll(async () => {
+    setTimeout(shutdown, 0);
+  });
+
+  it('Deposit', async () => {
+    for(let i = 0; i < 10; i++) {
+      let [deposit, sig] = randomDeposit(state, keys);
+      state.deposit(feePayer, deposit, sig);
+    }
+  });
+
+  /*
   let treePrivateKey : PrivateKey,
     incTree: LiabilityTree,
     refTree: MerkleTree,
     feePayer: PrivateKey,
     exchange: PrivateKey;
-
 
   beforeAll(async () => {
     await isReady;
@@ -83,18 +118,5 @@ describe('LiabilityTree.js', () => {
     let proof = new LiabilityProof({leaf: leaf, witness: witness});
 
     expect(() => incTree.deposit(exchange, deposit, sig, proof)).toThrow();
-
-    /*let txn = await Mina.transaction(feePayer, () => {
-      incTree.deposit(exchange, deposit, sig, proof);
-    });
-
-    await txn.prove();
-    await txn.sign([key]).send();
-
-    let nextLeaf = new LiabilityLeaf({account: key.toPublicKey(), balance: deposit.amount, prev: Field(0)});
-    refTree.setLeaf(index, nextLeaf.hash())
-
-    expect(incTree.root.get()).toEqual(refTree.getRoot())
-    expect(amount).toEqual(incTree.totalLiability.get())*/
-  });
+  });*/
 });

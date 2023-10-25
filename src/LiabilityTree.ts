@@ -5,8 +5,8 @@ export const users = {
     exchange: PrivateKey.random()
   };
 
-const height = 32;
-export class LiabilityWitness extends MerkleWitness(height) {}
+export const HEIGHT = 32;
+export class LiabilityWitness extends MerkleWitness(HEIGHT) {}
 
 export class LiabilityLeaf extends Struct({account: PublicKey, balance: Field, prev: Field}) {
     toFields(): Field[] {
@@ -123,7 +123,7 @@ function processWithdraw(state: TreeState, req: Withdraw, sig: Signature, proof:
 
 export const RollupProver = Experimental.ZkProgram({
     publicInput: TreeState,
-    publicOutput: TreeState,
+    publicOutput: TreeState, // Add hash of leaf and public key?
     methods: {
         deposit: {
             privateInputs: [Deposit, Signature, LiabilityProof],
@@ -227,7 +227,7 @@ export class LiabilityTree extends SmartContract {
 
     init() {
         super.init();
-        let zeroRoot = this.zero(height - 1);
+        let zeroRoot = this.zero(HEIGHT - 1);
         this.root.set(zeroRoot);
         this.actionState.set(Reducer.initialActionState);
         this.exchange.set(users['exchange'].toPublicKey())
