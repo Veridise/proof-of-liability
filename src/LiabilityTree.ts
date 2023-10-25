@@ -5,12 +5,15 @@ export const users = {
     exchange: PrivateKey.random()
   };
 
-export const HEIGHT = 32;
-export class LiabilityWitness extends MerkleWitness(HEIGHT) {}
+export const LIABILITY_HEIGHT = 32;
+export class LiabilityWitness extends MerkleWitness(LIABILITY_HEIGHT) {}
 
-export class LiabilityLeaf extends Struct({account: PublicKey, balance: Field, prev: Field}) {
+export const HISTORY_HEIGHT = 20; 
+export class HistoryWitness extends MerkleWitness(HISTORY_HEIGHT) {}
+
+export class LiabilityLeaf extends Struct({account: PublicKey, balance: Field, timestamp: Field, history: Field, size: Field,}) {
     toFields(): Field[] {
-        return [this.balance, this.prev].concat(this.account.toFields());
+        return [this.balance, this.timestamp, this.history, this.size].concat(this.account.toFields());
     }
 
     hash(): Field {
@@ -22,9 +25,9 @@ export class LiabilityProof extends Struct({leaf: LiabilityLeaf, witness: Liabil
 
 }
 
-export class Deposit extends Struct({account: PublicKey, amount: Field, tid: Field, prev: Field}) {
+export class Deposit extends Struct({account: PublicKey, amount: Field, timestamp: Field, tid: Field, prev: Field}) {
     toFields(): Field[] {
-        return [this.amount, this.prev, this.tid].concat(this.account.toFields())
+        return [Field(0xD390517), this.amount, this.prev, this.timestamp, this.tid].concat(this.account.toFields())
     }
 
     hash(): Field {
@@ -32,9 +35,9 @@ export class Deposit extends Struct({account: PublicKey, amount: Field, tid: Fie
     }
 }
 
-export class Withdraw extends Struct({account: PublicKey, amount: Field, tid: Field, prev: Field}) {
+export class Withdraw extends Struct({account: PublicKey, amount: Field, timestamp: Field, tid: Field, prev: Field}) {
     toFields(): Field[] {
-        return [this.amount, this.prev, this.tid].concat(this.account.toFields())
+        return [Field(0x3174D4A3), this.amount, this.prev, this.timestamp, this.tid].concat(this.account.toFields())
     }
 
     hash(): Field {
@@ -42,9 +45,9 @@ export class Withdraw extends Struct({account: PublicKey, amount: Field, tid: Fi
     }
 }
 
-export class Swap extends Struct({account: PublicKey, fromAmount: Field, toAmount: Field, toId: Field, fromId: Field, prevFrom: Field, prevTo: Field}) {
+export class Swap extends Struct({account: PublicKey, fromAmount: Field, toAmount: Field, timestamp: Field, toId: Field, fromId: Field, prevFrom: Field, prevTo: Field}) {
     toFields(): Field[] {
-        return [this.fromAmount, this.toAmount, this.toId, this.fromId, this.prevFrom, this.prevTo].concat(this.account.toFields())
+        return [Field(0x53A9), this.fromAmount, this.toAmount, this.timestamp, this.toId, this.fromId, this.prevFrom, this.prevTo].concat(this.account.toFields())
     }
 
     hash(): Field {
@@ -88,120 +91,116 @@ const zeros = [
     ];
 
 export class TreeState extends Struct({root: Field, totalLiability: Field}) {}
-function processDeposit(state: TreeState, req: Deposit, sig: Signature, proof: LiabilityProof): TreeState {
-    req.prev.equals(0).or(req.prev.equals(proof.leaf.hash())).assertTrue();
-    req.prev.equals(0).or(req.account.equals(proof.leaf.account)).assertTrue();
+/*
+ * Switched from the model where deposit could automatically allocate an account to 
+ *  simplify code and prevent potential tricks.
+ */
+function processCreate(state: TreeState, account: PublicKey, timestamp: Field, proof: LiabilityWitness): TreeState {
+    proof.calculateRoot(zeros[0]).assertEquals(state.root);
+    const newLeaf = new LiabilityLeaf({account, balance: Field(0), timestamp, size: Field(0), history: zeros[HISTORY_HEIGHT - 1]})
+    const newRoot = proof.calculateRoot(newLeaf.hash());
+    return new TreeState({root: newRoot, totalLiability: state.totalLiability});
+}
+
+function processDeposit(state: TreeState, req: Deposit, proof: LiabilityProof, historyWit: HistoryWitness): TreeState {
+    req.prev.assertNotEquals(Field(0));
+    req.prev.equals(proof.leaf.hash())
+    req.account.equals(proof.leaf.account)
+    historyWit.calculateIndex().equals(proof.leaf.size);
+    historyWit.calculateRoot(zeros[0]).equals(proof.leaf.history);
     proof.witness.calculateRoot(req.prev).assertEquals(state.root);
     req.tid.assertEquals(tid);
 
-    let oldBal = Provable.if(req.prev.equals(0), Field, Field(0), proof.leaf.balance);
-
-    let newBal = oldBal.add(req.amount);
-    newBal.assertGreaterThanOrEqual(oldBal);
+    let newBal = proof.leaf.balance.add(req.amount);
+    let newSize = proof.leaf.size.add(1);
+    let newHistory = historyWit.calculateRoot(req.prev)
+    newBal.assertGreaterThanOrEqual(proof.leaf.balance);
     newBal.assertGreaterThanOrEqual(req.amount);
-    let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, prev: req.prev});
+    let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, timestamp: req.timestamp, size: newSize, history: newHistory});
     let newRoot = proof.witness.calculateRoot(newLeaf.hash());
     let newTotal = state.totalLiability.add(req.amount);
+    newLeaf.hash().assertNotEquals(Field(0))
     return new TreeState({root: newRoot, totalLiability: newTotal})
 }
 
-function processWithdraw(state: TreeState, req: Withdraw, sig: Signature, proof: LiabilityProof): TreeState {
+function processWithdraw(state: TreeState, req: Withdraw, proof: LiabilityProof, historyWit: HistoryWitness): TreeState {
     req.prev.assertNotEquals(0);
     req.prev.assertEquals(proof.leaf.hash());
     req.account.assertEquals(proof.leaf.account);
+    historyWit.calculateIndex().equals(proof.leaf.size);
+    historyWit.calculateRoot(zeros[0]).equals(proof.leaf.history);
     proof.witness.calculateRoot(req.prev).assertEquals(state.root);
     req.tid.assertEquals(tid);
 
     proof.leaf.balance.assertGreaterThanOrEqual(req.amount);
 
     let newBal = proof.leaf.balance.sub(req.amount);
-    let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, prev: req.prev});
+    let newSize = proof.leaf.size.add(1);
+    let newHistory = historyWit.calculateRoot(req.prev)
+    let newLeaf:LiabilityLeaf = new LiabilityLeaf({account: req.account, balance: newBal, timestamp: req.timestamp, size: newSize, history: newHistory});
     let newRoot = proof.witness.calculateRoot(newLeaf.hash());
     let newTotal = state.totalLiability.sub(req.amount);
+    newLeaf.hash().assertNotEquals(Field(0));
     return new TreeState({root: newRoot, totalLiability: newTotal});
 }
 
+export class ProofOutput extends Struct({state: TreeState, prover: PublicKey, latestTimestamp: Field}) {}
 export const RollupProver = Experimental.ZkProgram({
     publicInput: TreeState,
-    publicOutput: TreeState, // Add hash of leaf and public key?
+    publicOutput: ProofOutput, // Add hash of leaf and public key?
     methods: {
+        create: {
+            //not currently validating the timestamp, something we can add in later
+            privateInputs: [PrivateKey, PublicKey, Field, LiabilityWitness],
+            method(start: TreeState, prover: PrivateKey, account: PublicKey, timestamp: Field, witness: LiabilityWitness): ProofOutput {
+                let newState = processCreate(start, account, timestamp, witness);
+                return new ProofOutput({state: newState, prover: prover.toPublicKey(), latestTimestamp: timestamp})
+            }
+        },
         deposit: {
-            privateInputs: [Deposit, Signature, LiabilityProof],
-            method(start: TreeState, req: Deposit, sig: Signature, proof: LiabilityProof): TreeState {
+            privateInputs: [PrivateKey, Deposit, Signature, LiabilityProof, HistoryWitness],
+            method(start: TreeState, prover: PrivateKey, req: Deposit, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness): ProofOutput {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-                let newState = processDeposit(start, req, sig, proof);
-                return newState;
+                let newState = processDeposit(start, req, proof, historyWit);
+                return new ProofOutput({state: newState, prover: prover.toPublicKey(), latestTimestamp: req.timestamp})
             }
         },
         withdraw: {
-            privateInputs: [Withdraw, Signature, LiabilityProof],
-            method(start: TreeState, req: Withdraw, sig: Signature, proof: LiabilityProof): TreeState {
+            privateInputs: [PrivateKey, Withdraw, Signature, LiabilityProof, HistoryWitness],
+            method(start: TreeState, prover: PrivateKey, req: Withdraw, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness): ProofOutput {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-                let newState = processWithdraw(start, req, sig, proof);
-                return newState
+                let newState = processWithdraw(start, req, proof, historyWit);
+                return new ProofOutput({state: newState, prover: prover.toPublicKey(), latestTimestamp: req.timestamp})
             }
         },
         swapFrom: {
-            privateInputs: [Swap, Signature, LiabilityProof],
-            method(start: TreeState, req: Swap, sig: Signature, proof: LiabilityProof): TreeState {
+            privateInputs: [PrivateKey, Swap, Signature, LiabilityProof, HistoryWitness],
+            method(start: TreeState, prover: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness): ProofOutput {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true))
-                let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, tid: req.fromId, prev: req.prevFrom})
-                let newState = processWithdraw(start, withdrawReq, sig, proof);
-                return newState
+                let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, timestamp: req.timestamp, tid: req.fromId, prev: req.prevFrom})
+                let newState = processWithdraw(start, withdrawReq, proof, historyWit);
+                return new ProofOutput({state: newState, prover: prover.toPublicKey(), latestTimestamp: req.timestamp})
             }
         },
         swapTo: {
-            privateInputs: [Swap, Signature, LiabilityProof],
-            method(start: TreeState, req: Swap, sig: Signature, proof: LiabilityProof): TreeState {
+            privateInputs: [PrivateKey, Swap, Signature, LiabilityProof, HistoryWitness],
+            method(start: TreeState, prover: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness): ProofOutput {
                 sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-                let depositReq = new Deposit({account: req.account, amount: req.toAmount, tid: req.toId, prev: req.prevTo});
-                let newState = processDeposit(start, depositReq, sig, proof);
-                return newState
+                let depositReq = new Deposit({account: req.account, amount: req.toAmount, timestamp: req.timestamp, tid: req.toId, prev: req.prevTo});
+                let newState = processDeposit(start, depositReq, proof, historyWit);
+                return new ProofOutput({state: newState, prover: prover.toPublicKey(), latestTimestamp: req.timestamp})
             }
         },
-        /*batch8: {
-            privateInputs: [SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof, SelfProof],
-            method(startState: TreeState, l1: SelfProof<TreeState, TreeState>, l2: SelfProof<TreeState, TreeState>, l3: SelfProof<TreeState, TreeState>, l4: SelfProof<TreeState, TreeState>, l5: SelfProof<TreeState, TreeState>, l6: SelfProof<TreeState, TreeState>, l7: SelfProof<TreeState, TreeState>, l8: SelfProof<TreeState, TreeState>): TreeState {
-                l1.verify();
-                l2.verify();
-                l3.verify();
-                l4.verify();
-                l5.verify();
-                l6.verify();
-                l7.verify();
-                l8.verify();
-                startState.root.assertEquals(l1.publicInput.root);
-                l1.publicOutput.root.assertEquals(l2.publicInput.root);
-                l2.publicOutput.root.assertEquals(l3.publicInput.root);
-                l3.publicOutput.root.assertEquals(l4.publicInput.root);
-                l4.publicOutput.root.assertEquals(l5.publicInput.root);
-                l5.publicOutput.root.assertEquals(l6.publicInput.root);
-                l6.publicOutput.root.assertEquals(l7.publicInput.root);
-                l7.publicOutput.root.assertEquals(l8.publicInput.root);
-                return l8.publicOutput;
-            }
-        },
-        batch4: {
-            privateInputs: [SelfProof, SelfProof, SelfProof, SelfProof],
-            method(startState: TreeState, l1: SelfProof<TreeState, TreeState>, l2: SelfProof<TreeState, TreeState>, l3: SelfProof<TreeState, TreeState>, l4: SelfProof<TreeState, TreeState>): TreeState {
-                l1.verify();
-                l2.verify();
-                l3.verify();
-                l4.verify();
-                startState.root.assertEquals(l1.publicInput.root);
-                l1.publicOutput.root.assertEquals(l2.publicInput.root);
-                l2.publicOutput.root.assertEquals(l3.publicInput.root);
-                l3.publicOutput.root.assertEquals(l4.publicInput.root);
-                return l4.publicOutput;
-            }
-        },*/
         merge: {
             privateInputs: [SelfProof, SelfProof],
-            method(startState: TreeState, left: SelfProof<TreeState, TreeState>, right: SelfProof<TreeState, TreeState>): TreeState {
+            method(startState: TreeState, left: SelfProof<TreeState, ProofOutput>, right: SelfProof<TreeState, ProofOutput>): ProofOutput {
                 left.verify();
                 right.verify();
+                right.publicOutput.latestTimestamp.assertGreaterThanOrEqual(left.publicOutput.latestTimestamp)
+                startState.totalLiability.assertEquals(left.publicInput.totalLiability);
                 startState.root.assertEquals(left.publicInput.root);
-                left.publicOutput.root.assertEquals(right.publicInput.root);
+                left.publicOutput.state.root.assertEquals(right.publicInput.root);
+                left.publicOutput.prover.assertEquals(right.publicOutput.prover);
                 return right.publicOutput;
             }
         }
@@ -214,7 +213,7 @@ export class RollupProof extends RollupProof_ {}
 export class LiabilityTree extends SmartContract {
     //originally had tid as state, but I think we can keep that fixed
     @state(Field) root = State<Field>();
-    @state(Field) actionState = State<Field>();
+    @state(Field) latestTimestamp = State<Field>();
     @state(PublicKey) exchange = State<PublicKey>();
     @state(Field) totalLiability = State<Field>();
 
@@ -227,13 +226,14 @@ export class LiabilityTree extends SmartContract {
 
     init() {
         super.init();
-        let zeroRoot = this.zero(HEIGHT - 1);
+        let zeroRoot = this.zero(LIABILITY_HEIGHT - 1);
         this.root.set(zeroRoot);
-        this.actionState.set(Reducer.initialActionState);
+        this.latestTimestamp.set(Field(Date.now()))
+        //this.actionState.set(Reducer.initialActionState);
         this.exchange.set(users['exchange'].toPublicKey())
     }
 
-    @method deposit(key: PrivateKey, req: Deposit, sig: Signature, proof: LiabilityProof) {
+    @method create(key: PrivateKey, account: PublicKey, witness: LiabilityWitness) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
@@ -243,72 +243,131 @@ export class LiabilityTree extends SmartContract {
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
+
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
+
+        let state = new TreeState({root, totalLiability});
+        let newState = processCreate(state, account, timestamp.value, witness)
+
+        this.root.set(newState.root);
+        this.totalLiability.set(newState.totalLiability);
+        this.latestTimestamp.set(timestamp.value);
+    }
+
+    @method deposit(key: PrivateKey, req: Deposit, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness) {
+        let root = this.root.get();
+        this.root.assertEquals(root);
+
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
+
+        let latestTimestamp = this.latestTimestamp.get();
+        this.latestTimestamp.assertEquals(latestTimestamp);
+
+        let exchange = this.exchange.get();
+        this.exchange.assertEquals(exchange);
+        key.toPublicKey().assertEquals(exchange);
+
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
+        timestamp.value.assertGreaterThanOrEqual(req.timestamp);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
         let state = new TreeState({root, totalLiability});
-        let newState = processDeposit(state, req, sig, proof);
+        let newState = processDeposit(state, req, proof, historyWit);
         
         this.root.set(newState.root);
-        this.totalLiability.set(newState.totalLiability)
+        this.totalLiability.set(newState.totalLiability);
+        this.latestTimestamp.set(Provable.if(latestTimestamp.lessThan(req.timestamp), Field, req.timestamp, latestTimestamp));
     }
 
-    @method withdraw(key: PrivateKey, req: Withdraw, sig: Signature, proof: LiabilityProof) {
+    @method withdraw(key: PrivateKey, req: Withdraw, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
         let totalLiability = this.totalLiability.get();
         this.totalLiability.assertEquals(totalLiability);
 
+        let latestTimestamp = this.latestTimestamp.get();
+        this.latestTimestamp.assertEquals(latestTimestamp);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
+
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
+        timestamp.value.assertGreaterThanOrEqual(req.timestamp);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
         let state = new TreeState({root, totalLiability});
-        let newState = processWithdraw(state, req, sig, proof);
+        let newState = processWithdraw(state, req, proof, historyWit);
         
         this.root.set(newState.root);
-        this.totalLiability.set(newState.totalLiability)
+        this.totalLiability.set(newState.totalLiability);
+        this.latestTimestamp.set(Provable.if(latestTimestamp.lessThan(req.timestamp), Field, req.timestamp, latestTimestamp));
     }
 
-    @method swapFrom(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof) {
+    @method swapFrom(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
         let totalLiability = this.totalLiability.get();
         this.totalLiability.assertEquals(totalLiability);
 
+        let latestTimestamp = this.latestTimestamp.get();
+        this.latestTimestamp.assertEquals(latestTimestamp);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
+
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
+        timestamp.value.assertGreaterThanOrEqual(req.timestamp);
 
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true))
-        let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, tid: req.fromId, prev: req.prevFrom});
+        let withdrawReq = new Withdraw({account: req.account, amount: req.fromAmount, timestamp: req.timestamp, tid: req.fromId, prev: req.prevFrom});
         let state = new TreeState({root, totalLiability});
-        let newState = processWithdraw(state, withdrawReq, sig, proof);
+        let newState = processWithdraw(state, withdrawReq, proof, historyWit);
 
         this.root.set(newState.root);
-        this.totalLiability.set(newState.totalLiability)
+        this.totalLiability.set(newState.totalLiability);
+        this.latestTimestamp.set(Provable.if(latestTimestamp.lessThan(req.timestamp), Field, req.timestamp, latestTimestamp));
     }
 
-    @method swapTo(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof) {
+    @method swapTo(key: PrivateKey, req: Swap, sig: Signature, proof: LiabilityProof, historyWit: HistoryWitness) {
         let root = this.root.get();
         this.root.assertEquals(root);
 
         let totalLiability = this.totalLiability.get();
         this.totalLiability.assertEquals(totalLiability);
 
+        let latestTimestamp = this.latestTimestamp.get();
+        this.latestTimestamp.assertEquals(latestTimestamp);
+
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
         key.toPublicKey().assertEquals(exchange);
 
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
+        timestamp.value.assertGreaterThanOrEqual(req.timestamp);
+
         sig.verify(req.account, req.toFields()).assertEquals(Bool(true));
-        let depositReq = new Deposit({account: req.account, amount: req.toAmount, tid: req.toId, prev: req.prevTo});
+        let depositReq = new Deposit({account: req.account, amount: req.toAmount, timestamp: req.timestamp, tid: req.toId, prev: req.prevTo});
         let state = new TreeState({root, totalLiability});
-        let newState = processDeposit(state, depositReq, sig, proof);
+        let newState = processDeposit(state, depositReq, proof, historyWit);
 
         this.root.set(newState.root);
-        this.totalLiability.set(newState.totalLiability)
+        this.totalLiability.set(newState.totalLiability);
+        this.latestTimestamp.set(Provable.if(latestTimestamp.lessThan(req.timestamp), Field, req.timestamp, latestTimestamp));
     }
 
     @method changeExchange(oldKey: PrivateKey, newKey: PrivateKey) {
@@ -322,9 +381,19 @@ export class LiabilityTree extends SmartContract {
      * The documentation here isn't good. I think I saw 3 different ways to specify the proof type and I'm
      * not certain which is correct. This one felt the most correct of all of them.
      */
-    @method batch(key: PrivateKey, proof: RollupProof) {
+    @method finalize(key: PrivateKey, proof: RollupProof) {
         let root = this.root.get();
         this.root.assertEquals(root);
+
+        let totalLiability = this.totalLiability.get();
+        this.totalLiability.assertEquals(totalLiability);
+
+        let latestTimestamp = this.latestTimestamp.get();
+        this.latestTimestamp.assertEquals(latestTimestamp);
+
+        let timestamp = this.network.timestamp.get();
+        //not sure if this is required or not
+        timestamp.assertEquals(this.network.timestamp.get());
 
         let exchange = this.exchange.get();
         this.exchange.assertEquals(exchange);
@@ -332,8 +401,24 @@ export class LiabilityTree extends SmartContract {
 
         proof.verify();
 
+        timestamp.value.assertGreaterThanOrEqual(proof.publicOutput.latestTimestamp);
+        proof.publicOutput.prover.assertEquals(exchange);
+        this.totalLiability.assertEquals(proof.publicInput.totalLiability);
         this.root.assertEquals(proof.publicInput.root);
-        this.root.set(proof.publicOutput.root);
+
+        this.root.set(proof.publicOutput.state.root);
+        this.totalLiability.set(proof.publicOutput.state.totalLiability);
+        this.latestTimestamp.set(Provable.if(latestTimestamp.lessThan(proof.publicOutput.latestTimestamp), Field, proof.publicOutput.latestTimestamp, latestTimestamp));
+    }
+
+    // Allow a user to check in a proof if it was missing from the latest snapshot
+    @method checkin(proof: RollupProof) {
+
+    }
+
+    // Allow a user to post a dispute which corresponds to branches in someone's history
+    @method dispute(proof: RollupProof) {
+
     }
 
     /*@method refute() {

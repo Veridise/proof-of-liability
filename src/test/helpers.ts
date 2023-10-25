@@ -1,5 +1,5 @@
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, PublicKey, Signature, UInt32, UInt64 } from 'o1js';
-import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, users, RollupProof, RollupProver, Withdraw, Swap, HEIGHT } from '../LiabilityTree';
+import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, users, RollupProof, RollupProver, Withdraw, Swap, LIABILITY_HEIGHT } from '../LiabilityTree';
 
 export class LiabilityState {
     tids: Array<Field>;
@@ -36,7 +36,7 @@ export class LiabilityState {
     async addTree(id: Field, feePayer: PrivateKey) {
         let privateKey = PrivateKey.random();
         let newTree = new LiabilityTree(privateKey.toPublicKey());
-        let refTree = new MerkleTree(HEIGHT);
+        let refTree = new MerkleTree(LIABILITY_HEIGHT);
 
         let txn = await Mina.transaction(feePayer, () => {
             AccountUpdate.fundNewAccount(feePayer.toPublicKey());
@@ -56,9 +56,9 @@ export class LiabilityState {
             return index;
         }
 
-        let id = BigInt(Math.round(Math.random() * (2 ** (HEIGHT - 1))));
+        let id = BigInt(Math.round(Math.random() * (2 ** (LIABILITY_HEIGHT - 1))));
         while(this.usedIds.has(id)) {
-            id = BigInt(Math.round(Math.random() * (2 ** (HEIGHT - 1))));
+            id = BigInt(Math.round(Math.random() * (2 ** (LIABILITY_HEIGHT - 1))));
         }
         this.usedIds.add(id);
         this.treeIndex.set(key, id);
@@ -192,20 +192,22 @@ export function randomDeposit(state: LiabilityState, keys: Array<PrivateKey>): [
     //Generated some numbers that were too large
     let amount = Field(Math.floor(Math.random() * 1000000000000))
     let prev = leaf.account.isEmpty() ? Field(0) : leaf.hash()
-    let deposit = new Deposit({account: key.toPublicKey(), amount: amount, tid: tid, prev: prev})
+    const timestamp = Field(Date.now());
+    let deposit = new Deposit({account: key.toPublicKey(), amount, timestamp, tid, prev})
     let sig = Signature.create(key, deposit.toFields())
     return [deposit, sig];
 }
 
 export function randomWithdraw(state: LiabilityState, keys: Array<PrivateKey>): [Withdraw, Signature] {
-    let tokens = state.tids;
-    let tid = tokens[Math.floor(Math.random() * tokens.length)];
-    let key = keys[Math.floor(Math.random() * keys.length)];
-    let leaf = state.getLeaf(tid, key.toPublicKey());
-    let amount = Field(Field.random().toBigInt() % (leaf.balance.toBigInt() + 1n));
-    let prev = leaf.account.isEmpty() ? Field(0) : leaf.hash()
-    let withdraw = new Withdraw({account: key.toPublicKey(), amount: amount, tid: tid, prev: prev})
-    let sig = Signature.create(key, withdraw.toFields())
+    const tokens = state.tids;
+    const tid = tokens[Math.floor(Math.random() * tokens.length)];
+    const key = keys[Math.floor(Math.random() * keys.length)];
+    const leaf = state.getLeaf(tid, key.toPublicKey());
+    const amount = Field(Field.random().toBigInt() % (leaf.balance.toBigInt() + 1n));
+    const prev = leaf.account.isEmpty() ? Field(0) : leaf.hash()
+    const timestamp = Field(Date.now());
+    const withdraw = new Withdraw({account: key.toPublicKey(), amount, timestamp, tid, prev})
+    const sig = Signature.create(key, withdraw.toFields())
     return [withdraw, sig];
 }
 
