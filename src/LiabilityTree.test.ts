@@ -1,4 +1,4 @@
-import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, RollupProof, RollupProver } from './LiabilityTree';
+import { Deposit, LiabilityTree, LiabilityProof, LiabilityLeaf, LiabilityWitness, RollupProof, RollupProver, ActionProver } from './LiabilityTree';
 
 import { AccountUpdate, Field, MerkleTree, Mina, PrivateKey, Signature, isReady, shutdown } from "o1js";
 import { LiabilityState, randomDeposit } from './test/helpers';
@@ -11,11 +11,13 @@ describe('LiabilityTree.js', () => {
   beforeAll(async () => {
     await isReady;
 
+    let Local = Mina.LocalBlockchain();
+    Mina.setActiveInstance(Local);
+
+    await ActionProver.compile();
     await RollupProver.compile();
     await LiabilityTree.compile();
 
-    let Local = Mina.LocalBlockchain();
-    Mina.setActiveInstance(Local);
     state = new LiabilityState();
     feePayer = Local.testAccounts[0].privateKey;
     keys = new Array<PrivateKey>();
@@ -33,7 +35,7 @@ describe('LiabilityTree.js', () => {
 
   it('Deposit', async () => {
     for(let i = 0; i < 10; i++) {
-      let [deposit, sig] = randomDeposit(state, keys);
+      let [deposit, sig] = await randomDeposit(feePayer, state, keys);
       state.deposit(feePayer, deposit, sig);
     }
   });
