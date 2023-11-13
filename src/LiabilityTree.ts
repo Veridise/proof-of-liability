@@ -216,6 +216,15 @@ export const RollupProver = Experimental.ZkProgram({
     publicInput: TreeState,
     publicOutput: ProofOutput, // Add hash of leaf and public key?
     methods: {
+        toRollup: {
+            privateInputs: [ActionProof],
+            method(startState: TreeState, action: ActionProof): ProofOutput {
+                action.verify();
+                startState.totalLiability.assertEquals(action.publicInput.state.totalLiability);
+                startState.root.assertEquals(action.publicInput.state.root);
+                return action.publicOutput;
+            }
+        },
         mergeActions: {
             privateInputs: [ActionProof, ActionProof],
             method(startState: TreeState, left: ActionProof, right: ActionProof): ProofOutput {
