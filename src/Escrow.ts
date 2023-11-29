@@ -137,11 +137,11 @@ export class Escrow extends SmartContract {
         this.curBal.set(curBal);
     }
 
-    @method issueWithdraw() {
+    /*@method issueWithdraw() {
 
     }
 
     @method issueCollect() {
 
-    }
+    }*/
 }

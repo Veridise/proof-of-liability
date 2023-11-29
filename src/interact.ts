@@ -12,7 +12,7 @@
  * Build the project: `$ npm run build`
  * Run with node:     `$ node build/src/interact.js <deployAlias>`.
  */
-import { Mina, PrivateKey } from 'o1js';
+/*import { Mina, PrivateKey } from 'o1js';
 import fs from 'fs/promises';
 import { Add } from './Add.js';
 
@@ -84,4 +84,4 @@ Your smart contract state will be updated
 as soon as the transaction is included in a block:
 https://berkeley.minaexplorer.com/transaction/${sentTx.hash()}
 `);
-}
+}*/

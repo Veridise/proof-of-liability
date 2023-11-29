@@ -1,5 +1,5 @@
-import { IncrementalMerkleTree } from './IncrementalMerkleTree.js';
+import { LiabilityTree } from './LiabilityTree.js';
 import { Escrow } from './Escrow.js';
 
-export { IncrementalMerkleTree };
+export { LiabilityTree };
 export { Escrow };

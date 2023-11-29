@@ -13,7 +13,7 @@ import {
 
 describe('Escrow.js', () => {
   let treePrivateKey : PrivateKey,
-    incTree: Escrow,
+    escrow: Escrow,
     refTree: MerkleTree,
     feePayer: PrivateKey;
 
@@ -27,14 +27,14 @@ describe('Escrow.js', () => {
 
     feePayer = Local.testAccounts[0].privateKey;
 
-    treePrivateKey = PrivateKey.random();
-    incTree = new Escrow(treePrivateKey.toPublicKey());
+    /*treePrivateKey = PrivateKey.random();
+    escrow = new Escrow(treePrivateKey.toPublicKey());
 
     let txn = await Mina.transaction(feePayer, () => {
       AccountUpdate.fundNewAccount(feePayer.toPublicKey());
-      incTree.deploy({ zkappKey: treePrivateKey });
+      escrow.deploy({ zkappKey: treePrivateKey });
     });
-    await txn.sign([feePayer, treePrivateKey]).send();
+    await txn.sign([feePayer, treePrivateKey]).send();*/
   });
 
   afterAll(async () => {
